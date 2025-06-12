@@ -2,4 +2,4 @@
 
 This is a demo for building a drone pathfinding experimental platform in Minecraft using [mineflayer](https://prismarinejs.github.io/mineflayer/#/).
 
-![MineDrone Demo](https://github.com/Ninot1Quyi/mineDrone/raw/main/view1.png)
+![MineDrone Demo](https://github.com/Ninot1Quyi/mineDrone/raw/main/screenshot/view1.png)
