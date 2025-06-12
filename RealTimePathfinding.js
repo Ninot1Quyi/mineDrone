@@ -19,7 +19,7 @@ class AdaptiveExplorer {
         this.pathIndex = 0;
         this.lastPosition = null;
         this.stuckCounter = 0;
-        this.maxStuckCount = 5;
+        this.maxStuckCount = 3;
         
         // 知识地图
         this.knowledgeMap = new Map();
@@ -41,6 +41,9 @@ class AdaptiveExplorer {
         // 路径质量评估
         this.pathQualityCache = new Map();
         this.qualityCacheTimeout = 10000;
+        // 卡住点记录
+        this.stuckPositions = new Map(); // key: posKey, value: timestamp
+        this.stuckTimeout = 20000; // 20秒后自动移除
     }
 
     async exploreToTarget(targetPos) {
@@ -131,6 +134,9 @@ class AdaptiveExplorer {
         
         if (this.isStuck(currentPos)) {
             console.log('检测到卡住，需要重规划');
+            // 记录卡住点
+            const stuckKey = this.getPositionKey(currentPos);
+            this.stuckPositions.set(stuckKey, Date.now());
             return true;
         }
         
@@ -470,6 +476,10 @@ class AdaptiveExplorer {
     }
 
     isPositionSafeKnowledge(position) {
+        const posKey = this.getPositionKey(position);
+        if (this.stuckPositions.has(posKey)) {
+            return false;
+        }
         const groundKey = this.getPositionKey({
             x: Math.floor(position.x),
             y: Math.floor(position.y - 1),
@@ -623,6 +633,12 @@ class AdaptiveExplorer {
             this.knowledgeMap.delete(key);
             this.obstacleMap.delete(key);
             this.safeAreas.delete(key);
+        }
+        // 清理过期的卡住点
+        for (const [key, ts] of this.stuckPositions) {
+            if (currentTime - ts > this.stuckTimeout) {
+                this.stuckPositions.delete(key);
+            }
         }
     }
 
