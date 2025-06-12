@@ -140,12 +140,10 @@ class BotController {
     }
 
     findNearestMemoryBlockToTarget(target) {
-        // 获取所有记忆方块
         const memoryBlocks = this.getMemoryBlocks();
         let minDist = Infinity;
         let nearest = null;
         for (const block of memoryBlocks) {
-            // 可加更多过滤条件，比如 block.type 必须是可行走的地面
             const dist = Math.sqrt(
                 Math.pow(block.position.x - target.x, 2) +
                 Math.pow(block.position.y - target.y, 2) +
@@ -172,19 +170,18 @@ class BotController {
             this.actualPath = [];
             
             if (this.pathfinding) {
-                const path = await this.pathfinding.exploreToTarget(this.target);
-                if (path && path.length > 0) {
-                    this.plannedPath = path.map(p => p.clone ? p.clone() : {...p});
+                const currentPos = this.bot.entity.position.clone();
+                const result = await this.pathfinding.exploreToTarget(this.target);
+                if (result && result.length === 2 && result[1]) {
+                    this.plannedPath = [result[0], result[1]].map(p => p instanceof Vec3 ? p.clone() : new Vec3(p.x, p.y, p.z));
                     this.currentPath = this.plannedPath.slice();
                     this.currentWaypointIndex = 0;
-                    console.log(`路径重规划完成，新路径包含 ${this.currentPath.length} 个点`);
-                    // 新增：详细打印路径点
+                    console.log(`路径规划完成，包含 ${this.currentPath.length} 个点`);
                     this.currentPath.forEach((pt, idx) => {
                         console.log(`  航点${idx}: (${pt.x.toFixed(2)}, ${pt.y.toFixed(2)}, ${pt.z.toFixed(2)})`);
                     });
                     this.bot.chat(`找到路径，包含 ${this.currentPath.length} 个航点`);
                 } else {
-                    // 新增：在记忆空间中找最近点
                     const nearest = this.findNearestMemoryBlockToTarget(this.target);
                     if (nearest) {
                         console.log('目标不可达，尝试导航到记忆空间中最近的点:', nearest);
@@ -224,7 +221,10 @@ class BotController {
                 return;
             }
 
-            
+            // if (this.isStuck(currentPos)) {
+            //     this.handleStuck();
+            //     return;
+            // }
 
             this.lastPosition = currentPos.clone();
             this.moveTowardWaypoint(currentPos);
@@ -322,11 +322,9 @@ class BotController {
             const currentPos = this.bot.entity.position.clone();
             console.log('重新规划路径...');
             
-            // 适配新版API
-            const newPath = await this.pathfinding.exploreToTarget(this.target);
-            
-            if (newPath && newPath.length > 0) {
-                this.currentPath = newPath.map(pos => new Vec3(pos.x, pos.y, pos.z));
+            const result = await this.pathfinding.exploreToTarget(this.target);
+            if (result && result.length === 2 && result[1]) {
+                this.currentPath = [result[0], result[1]].map(pos => pos instanceof Vec3 ? pos.clone() : new Vec3(pos.x, pos.y, pos.z));
                 this.currentWaypointIndex = 0;
                 console.log(`路径重规划完成，新路径包含 ${this.currentPath.length} 个点`);
                 this.bot.chat(`找到路径，包含 ${this.currentPath.length} 个航点`);
@@ -407,9 +405,9 @@ class BotController {
             currentWaypoint: this.currentWaypointIndex,
             totalWaypoints: this.currentPath.length,
             position: this.bot.entity.position ? {
-                x: this.bot.entity.position.x,
-                y: this.bot.entity.position.y,
-                z: this.bot.entity.position.z
+                x: this.botPos.x,
+                y: this.botPos.y,
+                z: this.botPos.z
             } : null,
             yaw: this.bot.entity.yaw || 0,
             memoryStats: memoryStats
@@ -431,6 +429,7 @@ class BotController {
         <head>
             <meta charset="UTF-8">
             <title>Minecraft Viewer 信息</title>
+            文件
             <style>
                 body {
                     font-family: Arial, sans-serif;

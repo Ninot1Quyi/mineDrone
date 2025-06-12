@@ -59,7 +59,7 @@ class EnvironmentPerception {
             
             // 首先检查方块是否存在且非空气
             const block = this.getBlockFromCache(blockPos);
-            if (!block || block.name.includes('air') || block.name.includes('short_grass')) {
+            if (!block || block.name.includes('air') || block.name.includes('short_grass')|| block.name.includes('flower')) {
                 skippedAirBlocks++;
                 continue;
             }
@@ -328,7 +328,7 @@ class EnvironmentPerception {
             'air', 'grass', 'tall_grass', 'dead_bush', 'poppy', 'dandelion',
             'wheat', 'carrots', 'potatoes', 'beetroots', 'sugar_cane',
             'vine', 'web', 'torch', 'redstone_torch', 'lever', 'button',
-            'pressure_plate', 'tripwire', 'flower', 'sapling', 'water', 'lava','short_grass'
+            'pressure_plate', 'tripwire', 'flower', 'sapling', 'water', 'lava','short_grass','flower'
         ];
         
         return !nonSolidBlocks.some(name => block.name.includes(name));
@@ -430,7 +430,7 @@ class EnvironmentPerception {
             for (const blockPos of batch) {
                 checkedCount++;
                 const block = this.getBlockFromCache(blockPos);
-                if (!block || block.name.includes('air') || block.name.includes('short_grass')) {
+                if (!block || block.name.includes('air') || block.name.includes('short_grass')|| block.name.includes('flower')) {
                     skippedAirBlocks++;
                     continue;
                 }
@@ -452,7 +452,7 @@ class EnvironmentPerception {
         }
         // 新增：同步可见方块到memoryMap
         for (const [key, block] of this.visibleBlocks.entries()) {
-            if (!block.type.includes('air') && !block.type.includes('short_grass')) {
+            if (!block.type.includes('air') && !block.type.includes('short_grass') && !block.type.includes('flower')) {
                 if (!this.memoryMap.has(key)) {
                     this.memoryMap.set(key, { ...block });
                 }
