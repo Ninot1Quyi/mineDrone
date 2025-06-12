@@ -1,0 +1,20 @@
+{
+  "name": "-minedrone",
+  "version": "1.0.0",
+  "description": "这是一个使用 [mineflayer](https://prismarinejs.github.io/mineflayer/#/) 在 Minecraft 中构建无人机寻路实验平台的 demo。",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "canvas": "^3.1.0",
+    "chatregex": "^2.0.1",
+    "mineflayer": "^4.29.0",
+    "mineflayer-pathfinder": "^2.4.5",
+    "prismarine-viewer": "^1.33.0"
+  }
+}
