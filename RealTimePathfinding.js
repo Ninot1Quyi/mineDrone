@@ -44,6 +44,20 @@ class AdaptiveExplorer {
         // 卡住点记录
         this.stuckPositions = new Map(); // key: posKey, value: timestamp
         this.stuckTimeout = 20000; // 20秒后自动移除
+        // 路径记忆，避免重复
+        this.recentPath = [];
+        this.recentPathMaxLength = 30;
+        // 死胡同点集合
+        this.deadEnds = new Set();
+        // 连续卡住自救参数
+        this.stuckRescueThreshold = 10;
+        this.stuckRescueCounter = 0;
+        // 记录最近N步位置用于卡住检测
+        this.lastPositions = [];
+        this.lastPositionsMax = 6;
+        
+        // 定义忽略方块白名单
+        this.IGNORE_BLOCKS = ['poppy', 'dandelion', 'oxeye_daisy', 'torch', 'oak_trapdoor'];
     }
 
     async exploreToTarget(targetPos) {
@@ -62,6 +76,12 @@ class AdaptiveExplorer {
         if (this.needsReplanning(currentPos)) {
             console.log('触发重规划');
             await this.replanPath(currentPos);
+        }
+        
+        // 卡住检测，优先自救
+        if (this.isStuck(currentPos)) {
+            console.log('检测到卡住，优先自救');
+            return await this.stuckRescueMove(currentPos);
         }
         
         const nextStep = await this.getNextStep(currentPos);
@@ -189,46 +209,38 @@ class AdaptiveExplorer {
 
     findBestIntermediateTarget(currentPos, finalTarget) {
         console.log('寻找最优中间目标');
-        
-        if (this.isPositionInKnownArea(finalTarget)) {
-            console.log('最终目标在已知区域内');
+        // 只有目标在已知区域且可达才直接返回
+        if (this.isPositionInKnownArea(finalTarget) && this.isReachable(currentPos, finalTarget)) {
+            console.log('最终目标在已知区域内且可达');
             return this.adjustToGroundKnowledge(finalTarget);
         }
-        
         const direction = this.getDirection2D(currentPos, finalTarget);
         const candidates = [];
-        
         for (const [key, boundaryInfo] of this.exploredBoundary) {
             const pos = this.parsePositionKey(key);
             if (!pos) continue;
-            
             pos.y = this.getGroundLevelKnowledge(pos.x, pos.z);
-            
             const score = this.evaluateIntermediateTarget(currentPos, pos, finalTarget, direction);
-            if (score > 0) {
+            // 只有可达的点才作为候选
+            if (score > 0 && this.isReachable(currentPos, pos)) {
                 candidates.push({ position: pos, score: score });
             }
         }
-        
         for (const key of this.safeAreas) {
             const pos = this.parsePositionKey(key);
             if (!pos) continue;
-            
             pos.y = this.getGroundLevelKnowledge(pos.x, pos.z);
-            
             const score = this.evaluateIntermediateTarget(currentPos, pos, finalTarget, direction);
-            if (score > 0) {
+            if (score > 0 && this.isReachable(currentPos, pos)) {
                 candidates.push({ position: pos, score: score });
             }
         }
-        
         if (candidates.length > 0) {
             candidates.sort((a, b) => b.score - a.score);
             const bestTarget = candidates[0].position;
             console.log(`选择最佳中间目标: (${bestTarget.x.toFixed(1)}, ${bestTarget.y.toFixed(1)}, ${bestTarget.z.toFixed(1)}), 评分: ${candidates[0].score.toFixed(2)}`);
             return bestTarget;
         }
-        
         console.log('没有找到合适的中间目标，使用近距离目标');
         return this.generateNearTarget(currentPos, direction);
     }
@@ -351,11 +363,16 @@ class AdaptiveExplorer {
     async getNextStep(currentPos) {
         if (this.plannedPath.length > 0 && this.pathIndex < this.plannedPath.length) {
             const nextWaypoint = this.plannedPath[this.pathIndex];
-            
             if (this.distance2D(currentPos, nextWaypoint) < this.goalRadius) {
                 this.pathIndex++;
                 console.log(`到达航点 ${this.pathIndex - 1}, 前往下一个目标`);
-                
+                // 死胡同检测
+                if (this.isDeadEnd(currentPos)) {
+                    console.log('当前位置为死胡同，加入deadEnds并重规划');
+                    this.deadEnds.add(this.getPositionKey(currentPos));
+                    await this.replanPath(currentPos);
+                    return null;
+                }
                 if (this.pathIndex < this.plannedPath.length) {
                     return this.plannedPath[this.pathIndex];
                 } else {
@@ -363,7 +380,6 @@ class AdaptiveExplorer {
                     return null;
                 }
             }
-            
             if (this.isPathClearInKnowledgeMap(currentPos, nextWaypoint) && 
                 this.isHeightAccessible(currentPos, nextWaypoint)) {
                 return nextWaypoint;
@@ -372,7 +388,11 @@ class AdaptiveExplorer {
                 return await this.findDetourPath(currentPos, nextWaypoint);
             }
         }
-        
+        // 如果没有计划路径，且卡住，优先自救
+        if (this.isStuck(currentPos)) {
+            console.log('检测到卡住（无计划路径），优先自救');
+            return (await this.stuckRescueMove(currentPos))[1];
+        }
         return null;
     }
 
@@ -419,19 +439,24 @@ class AdaptiveExplorer {
 
     async exploratoryMovement(currentPos) {
         console.log('执行探索性移动');
-        
+        // 1. 朝向未探索区域移动
         const explorationTarget = this.findNearestUnexploredArea(currentPos);
-        if (explorationTarget) {
+        if (explorationTarget && this.isReachable(currentPos, explorationTarget)) {
             console.log(`朝向未探索区域移动: (${explorationTarget.x.toFixed(1)}, ${explorationTarget.y.toFixed(1)}, ${explorationTarget.z.toFixed(1)})`);
             return [currentPos, explorationTarget];
         }
-        
-        const randomSafeTarget = this.findRandomSafeMovement(currentPos);
+        // 2. 随机安全移动
+        let randomSafeTarget = null;
+        for (let i = 0; i < 10; i++) {
+            randomSafeTarget = this.findRandomSafeMovement(currentPos);
+            if (randomSafeTarget && this.isReachable(currentPos, randomSafeTarget)) break;
+            randomSafeTarget = null;
+        }
         if (randomSafeTarget) {
             console.log(`随机安全移动: (${randomSafeTarget.x.toFixed(1)}, ${randomSafeTarget.y.toFixed(1)}, ${randomSafeTarget.z.toFixed(1)})`);
             return [currentPos, randomSafeTarget];
         }
-        
+        // 3. 执行微小移动
         console.log('执行微小移动');
         return [currentPos, {
             x: currentPos.x + (Math.random() - 0.5) * 0.5,
@@ -445,15 +470,42 @@ class AdaptiveExplorer {
             const movement = this.distance2D(currentPos, this.lastPosition);
             if (movement < 0.5) {
                 this.stuckCounter++;
+                this.stuckRescueCounter++;
             } else {
                 this.stuckCounter = 0;
+                this.stuckRescueCounter = 0;
             }
         }
         this.lastPosition = { ...currentPos };
+        // 路径记忆
+        const posKey = this.getPositionKey(currentPos);
+        this.recentPath.push(posKey);
+        if (this.recentPath.length > this.recentPathMaxLength) {
+            this.recentPath.shift();
+        }
+        // 连续卡住自救：超过阈值自动清理deadEnds和recentPath
+        if (this.stuckRescueCounter > this.stuckRescueThreshold) {
+            console.log('连续卡住，自动清理deadEnds和recentPath以自救');
+            this.deadEnds.clear();
+            this.recentPath = [];
+            this.stuckRescueCounter = 0;
+        }
+        // 记录最近N步位置
+        this.lastPositions.push({ ...currentPos });
+        if (this.lastPositions.length > this.lastPositionsMax) {
+            this.lastPositions.shift();
+        }
     }
 
     isStuck(currentPos) {
-        return this.stuckCounter >= this.maxStuckCount;
+        if (this.stuckCounter >= this.maxStuckCount) return true;
+        if (this.lastPositions.length === this.lastPositionsMax) {
+            const first = this.lastPositions[0];
+            if (this.lastPositions.every(p => this.distance2D(p, first) < 0.1)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     isPathClearInKnowledgeMap(start, end) {
@@ -476,58 +528,66 @@ class AdaptiveExplorer {
     }
 
     isPositionSafeKnowledge(position) {
-        const posKey = this.getPositionKey(position);
-        if (this.stuckPositions.has(posKey)) {
-            return false;
+        // 体积判定：以目标点为中心，检查周围±0.3格的四个角和中心点
+        const offsets = [
+            {x: 0, z: 0},
+            {x: 0.3, z: 0.3},
+            {x: 0.3, z: -0.3},
+            {x: -0.3, z: 0.3},
+            {x: -0.3, z: -0.3}
+        ];
+        for (const offset of offsets) {
+            const checkPos = {
+                x: position.x + offset.x,
+                y: position.y,
+                z: position.z + offset.z
+            };
+            const posKey = this.getPositionKey(checkPos);
+            // 避免重复走同一路径
+            if (this.recentPath.includes(posKey)) return false;
+            if (this.stuckPositions.has(posKey)) return false;
+            if (this.deadEnds.has(posKey)) return false;
+            const groundKey = this.getPositionKey({
+                x: Math.floor(checkPos.x),
+                y: Math.floor(checkPos.y - 1),
+                z: Math.floor(checkPos.z)
+            });
+            const bodyKey = this.getPositionKey({
+                x: Math.floor(checkPos.x),
+                y: Math.floor(checkPos.y),
+                z: Math.floor(checkPos.z)
+            });
+            const headKey = this.getPositionKey({
+                x: Math.floor(checkPos.x),
+                y: Math.floor(checkPos.y + 1),
+                z: Math.floor(checkPos.z)
+            });
+            if (this.obstacleMap.has(bodyKey) || this.obstacleMap.has(headKey)) {
+                return false;
+            }
+            if (this.safeAreas.has(bodyKey)) {
+                continue;
+            }
+            const groundInfo = this.knowledgeMap.get(groundKey);
+            const bodyInfo = this.knowledgeMap.get(bodyKey);
+            const headInfo = this.knowledgeMap.get(headKey);
+            // 水面、trapdoor等特殊方块判定为不可走
+            if (groundInfo && (groundInfo.block.type === 'air' || 
+                groundInfo.block.type.toLowerCase().includes('water') ||
+                groundInfo.block.type.toLowerCase().includes('trapdoor'))) {
+                return false;
+            }
+            if (bodyInfo && !bodyInfo.passable) {
+                return false;
+            }
+            if (headInfo && !headInfo.passable) {
+                return false;
+            }
+            // 检查下方是否为栅栏
+            if (groundInfo && groundInfo.block.type.toLowerCase().includes('fence')) {
+                return false;
+            }
         }
-        const groundKey = this.getPositionKey({
-            x: Math.floor(position.x),
-            y: Math.floor(position.y - 1),
-            z: Math.floor(position.z)
-        });
-        
-        const bodyKey = this.getPositionKey({
-            x: Math.floor(position.x),
-            y: Math.floor(position.y),
-            z: Math.floor(position.z)
-        });
-        
-        const headKey = this.getPositionKey({
-            x: Math.floor(position.x),
-            y: Math.floor(position.y + 1),
-            z: Math.floor(position.z)
-        });
-        
-        if (this.obstacleMap.has(bodyKey) || this.obstacleMap.has(headKey)) {
-            return false;
-        }
-        
-        if (this.safeAreas.has(bodyKey)) {
-            return true;
-        }
-        
-        const groundInfo = this.knowledgeMap.get(groundKey);
-        const bodyInfo = this.knowledgeMap.get(bodyKey);
-        const headInfo = this.knowledgeMap.get(headKey);
-        
-        if (groundInfo && (groundInfo.block.type === 'air' || 
-            groundInfo.block.type.toLowerCase().includes('water'))) {
-            return false;
-        }
-        
-        if (bodyInfo && !bodyInfo.passable) {
-            return false;
-        }
-        
-        if (headInfo && !headInfo.passable) {
-            return false;
-        }
-        
-        // 检查下方是否为栅栏
-        if (groundInfo && groundInfo.block.type.toLowerCase().includes('fence')) {
-            return false;
-        }
-        
         return true;
     }
 
@@ -603,13 +663,13 @@ class AdaptiveExplorer {
     isBlockPassable(block) {
         return block.type === 'air' || 
                block.type.toLowerCase().includes('grass') ||
-               block.type.toLowerCase().includes('flower');
+               this.IGNORE_BLOCKS.some(f => block.type.toLowerCase().includes(f));
     }
 
     isBlockObstacle(block) {
         return block.type !== 'air' && 
                !block.type.toLowerCase().includes('grass') &&
-               !block.type.toLowerCase().includes('flower') &&
+               !block.type.toLowerCase().includes('poppy') &&
                (block.type.toLowerCase().includes('water') || block.type.toLowerCase().includes('fence'));
     }
 
@@ -745,7 +805,11 @@ class AdaptiveExplorer {
             {x: 1, z: 0}, {x: -1, z: 0}, {x: 0, z: 1}, {x: 0, z: -1},
             {x: 1, z: 1}, {x: -1, z: -1}, {x: 1, z: -1}, {x: -1, z: 1}
         ];
-        
+        // Fisher-Yates 洗牌算法打乱顺序
+        for (let i = directions.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [directions[i], directions[j]] = [directions[j], directions[i]];
+        }
         for (const dir of directions) {
             neighbors.push({
                 x: gridPos.x + dir.x,
@@ -753,7 +817,6 @@ class AdaptiveExplorer {
                 z: gridPos.z + dir.z
             });
         }
-        
         return neighbors;
     }
 
@@ -889,6 +952,83 @@ class AdaptiveExplorer {
         }
         
         return null;
+    }
+
+    // 判断from到to是否连通（BFS，步数限制）
+    isReachable(from, to) {
+        const visited = new Set();
+        const queue = [{ x: Math.floor(from.x), y: Math.floor(from.y), z: Math.floor(from.z) }];
+        const targetKey = this.getPositionKey({ x: Math.floor(to.x), y: Math.floor(to.y), z: Math.floor(to.z) });
+        const maxSteps = 100;
+        let steps = 0;
+        while (queue.length > 0 && steps < maxSteps) {
+            const pos = queue.shift();
+            const key = this.getPositionKey(pos);
+            if (visited.has(key)) continue;
+            visited.add(key);
+            if (key === targetKey || this.distance2D(pos, to) < 1.0) return true;
+            for (const dir of [
+                {x:1,z:0},{x:-1,z:0},{x:0,z:1},{x:0,z:-1}
+            ]) {
+                const next = {x: pos.x+dir.x, y: pos.y, z: pos.z+dir.z};
+                next.y = this.getGroundLevelKnowledge(next.x, next.z);
+                if (this.isPositionSafeKnowledge(next)) {
+                    queue.push(next);
+                }
+            }
+            steps++;
+        }
+        return false;
+    }
+
+    // 死胡同检测：判断当前位置四周是否有安全可达点
+    isDeadEnd(pos) {
+        for (const dir of [
+            {x:1,z:0},{x:-1,z:0},{x:0,z:1},{x:0,z:-1}
+        ]) {
+            const next = {x: pos.x+dir.x, y: pos.y, z: pos.z+dir.z};
+            next.y = this.getGroundLevelKnowledge(next.x, next.z);
+            if (this.isPositionSafeKnowledge(next)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // 卡住时优先尝试跳一跳或四周自救
+    async stuckRescueMove(currentPos) {
+        const jumpDirs = [
+            {x: 1, z: 0}, {x: -1, z: 0}, {x: 0, z: 1}, {x: 0, z: -1},
+            {x: 1, z: 1}, {x: -1, z: -1}, {x: 1, z: -1}, {x: -1, z: 1}
+        ];
+        for (const dir of jumpDirs) {
+            // 尝试跳一跳
+            const tryPos = {
+                x: currentPos.x + dir.x,
+                y: currentPos.y + 1,
+                z: currentPos.z + dir.z
+            };
+            if (this.isPositionSafeKnowledge(tryPos)) {
+                console.log('卡住自救：尝试跳一跳');
+                return [currentPos, tryPos];
+            }
+            // 尝试平移一格
+            const tryPos2 = {
+                x: currentPos.x + dir.x,
+                y: currentPos.y,
+                z: currentPos.z + dir.z
+            };
+            if (this.isPositionSafeKnowledge(tryPos2)) {
+                console.log('卡住自救：尝试平移一格');
+                return [currentPos, tryPos2];
+            }
+        }
+        // 实在不行就原地微小扰动
+        return [currentPos, {
+            x: currentPos.x + (Math.random() - 0.5) * 0.5,
+            y: currentPos.y,
+            z: currentPos.z + (Math.random() - 0.5) * 0.5
+        }];
     }
 }
 
